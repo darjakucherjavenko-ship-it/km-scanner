@@ -62,7 +62,8 @@
   .tabs button.on{background:var(--ink);color:var(--white);border-color:var(--ink)}
   .hist{margin-top:12px;font-size:13px;color:var(--muted);max-height:160px;overflow:auto}
   .hist div{padding:3px 0;border-bottom:1px dotted var(--line)}
-  .hist .r{color:var(--bad)} .hist .o{color:var(--ok)} .hist .u{color:var(--warn)}
+  .hist .r{color:var(--bad)} .hist .o{color:var(--ok)} .hist .u{color:var(--warn)} .hist .t{color:var(--muted);opacity:.7}
+  header .ver{font-size:11px;color:var(--muted);margin-left:-10px}
   .help{font-size:13px;color:var(--muted)}
   @media(min-width:900px){ .cols{display:grid;grid-template-columns:1fr 1fr;gap:14px} }
   .fab{position:fixed;overflow:hidden;cursor:pointer;right:18px;bottom:18px;z-index:20;display:flex;align-items:center;gap:10px;padding:0 22px 0 0;height:64px;border-radius:32px;background:var(--ink);color:#fff;border:0;box-shadow:0 6px 18px rgba(0,0,0,.25);font-size:17px;font-weight:600}
@@ -76,7 +77,7 @@
 </head>
 <body>
 <header>
-  <h1>КМ-сканер</h1>
+  <h1>КМ-сканер</h1><span class="ver">v2</span>
   <div class="stats" id="stats"></div>
   <div class="lang row"><button class="on" data-lang="ru">RU</button><button data-lang="zh">中文</button></div>
 </header>
@@ -92,8 +93,8 @@
     <label for="doc" data-i="doc_label">Отгрузка / документ (необязательно)</label>
     <input type="text" id="doc" data-ph="doc_ph" placeholder="например: WB Казань 10.09">
     <label for="scan" data-i="scan_label">Наведи сканер на код и нажми курок</label>
-    <input type="text" id="scan" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" data-ph="scan_ph" placeholder="здесь появится код…" autofocus>
-    <div class="status" id="status"><div class="sub" data-i="scan_hint">Курсор должен стоять в поле выше. Сканер сам нажмёт Enter.</div></div>
+    <form id="scanform" autocomplete="off" action="#"><input type="text" id="scan" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" data-ph="scan_ph" placeholder="здесь появится код…" autofocus></form>
+    <div class="status" id="status"><div class="sub" data-i="scan_hint">Сканируй — курсор встанет в поле сам. Сканер сам нажмёт Enter.</div></div>
     <div class="hist" id="hist"></div>
   </section>
 </div>
@@ -223,7 +224,7 @@ const I18N = {
     tab_scan:'Сканирование', tab_files:'Файлы', tab_codes:'Коды',
     doc_label:'Отгрузка / документ (необязательно)', doc_ph:'например: WB Казань 10.09',
     scan_label:'Наведи сканер на код и нажми курок', scan_ph:'здесь появится код…',
-    scan_hint:'Курсор должен стоять в поле выше. Сканер сам нажмёт Enter.',
+    scan_hint:'Сканируй — курсор встанет в поле сам. Сканер сам нажмёт Enter.', tail_skip:'хвост кода — пропущен',
     upload_h:'Загрузить PDF с этикетками', drop_text:'Нажми, чтобы выбрать PDF из «Загрузок» (можно несколько)',
     files_h:'Файлы', th_file:'Файл', th_uploaded:'Загружен', th_free:'Свободно', th_product:'Товар', th_size:'Размер', th_serial:'Серийник', th_status:'Статус', th_when:'Когда / куда',
     export_all:'Скачать PDF со всеми свободными кодами', print_all:'Печать всех свободных',
@@ -244,7 +245,7 @@ const I18N = {
     tab_scan:'扫描', tab_files:'文件', tab_codes:'编码',
     doc_label:'发货单 / 单据（可不填）', doc_ph:'例如：WB 喀山 10.09',
     scan_label:'将扫描枪对准条码并按扳机', scan_ph:'编码将显示在这里…',
-    scan_hint:'光标必须停在上面的输入框中。扫描枪会自动按回车。',
+    scan_hint:'直接扫描即可，光标会自动定位。扫描枪会自动按回车。', tail_skip:'编码尾部 — 已忽略',
     upload_h:'上传带标签的 PDF', drop_text:'点击选择 PDF（可多选）',
     files_h:'文件', th_file:'文件', th_uploaded:'上传时间', th_free:'剩余', th_product:'商品', th_size:'尺码', th_serial:'序列号', th_status:'状态', th_when:'时间 / 单据',
     export_all:'下载所有未使用编码的 PDF', print_all:'打印所有未使用',
@@ -437,10 +438,60 @@ async function handleScan(raw){
   $('#hist').insertAdjacentHTML('afterbegin',`<div class="${cls}">${new Date().toLocaleTimeString(LANG==='zh'?'zh-CN':'ru')} · ${esc(d.serial||'')} · ${esc(d.message)}</div>`);
   refreshAll();
 }
-$('#scan').addEventListener('keydown',e=>{ if(e.key!=='Enter') return; e.preventDefault(); const v=$('#scan').value; $('#scan').value=''; if(v.trim()) handleScan(v); });
-// некоторые сканеры шлют Tab или ничего — ловим паузу
-let scanTimer; $('#scan').addEventListener('input',()=>{ clearTimeout(scanTimer); scanTimer=setTimeout(()=>{ const v=$('#scan').value; if(v.length>30){ $('#scan').value=''; handleScan(v);} },250); });
-document.addEventListener('click',e=>{ if($('#view-scan').classList.contains('on') && !e.target.closest('input,button,a,details,textarea')) $('#scan').focus(); });
+// ============================================================ приём со сканера
+// Сканер работает как клавиатура, но на планшетах код часто приходит не одной
+// строкой: Android/IME режет его на куски с паузами, разделитель GS у некоторых
+// сканеров превращается в Enter, Enter иногда приходит как keyCode 229.
+// Поэтому: 1) всё, что пришло, копится в буфере, пока код не станет полным или не
+// найдётся в базе; 2) хвосты 91…/92… после уже принятого кода пропускаются;
+// 3) Enter ловится несколькими способами; 4) курсор подхватывается сам.
+const scanEl=$('#scan');
+let buf='', holdTimer=null, pauseTimer=null, lastParsedAt=0, chain=Promise.resolve();
+const looksComplete=s=>/91.{4}\x1d?92.{44}/.test(s) || /93.{4}$/.test(s);   // полный КМ (лёгпром) или короткий с 93
+const isTail=s=>/^\x1d?(91|92|93)/.test(s.replace(/^\](d2|Q3|C1|e0)/,''));
+const histLine=(cls,txt)=>$('#hist').insertAdjacentHTML('afterbegin',`<div class="${cls}">${new Date().toLocaleTimeString(LANG==='zh'?'zh-CN':'ru')} · ${txt}</div>`);
+function takeField(){ const v=scanEl.value; scanEl.value=''; return v.replace(/[\r\n\t]/g,''); }
+async function flush(){
+  clearTimeout(holdTimer); holdTimer=null;
+  const s=buf; buf='';
+  if(!s.trim()) return;
+  if(parseKM(s)) lastParsedAt=Date.now();
+  await handleScan(s);
+}
+function scheduleHold(){ clearTimeout(holdTimer); holdTimer=setTimeout(()=>{ holdTimer=null; chain=chain.then(flush).catch(()=>{}); },1500); }
+async function handleChunk(v){
+  if(!v){ if(buf && !holdTimer) scheduleHold(); return; }    // пустой Enter: буфер не трогаем
+  clearTimeout(holdTimer); holdTimer=null;
+  buf+=v;
+  const p=parseKM(buf);
+  if(p){
+    if(looksComplete(buf) || await findCode(p.gtin,p.serial)) return flush();
+    return scheduleHold();                       // начало верное, но код пришёл не весь — ждём остаток
+  }
+  if(isTail(buf) && Date.now()-lastParsedAt<4000){ // хвост кода, который уже обработан
+    histLine('t',`${T('tail_skip')} · ${esc(buf.slice(0,24))}…`); buf=''; return;
+  }
+  return flush();
+}
+function onChunk(v){ chain=chain.then(()=>handleChunk(v)).catch(()=>{}); }
+function terminator(e){ if(e) e.preventDefault(); clearTimeout(pauseTimer); onChunk(takeField()); }
+scanEl.addEventListener('keydown',e=>{ if(e.key==='Enter'||e.key==='Tab'||e.keyCode===13||e.keyCode===9) terminator(e); });
+scanEl.addEventListener('keyup',e=>{ if(e.key==='Enter'||e.keyCode===13) terminator(e); });          // Android IME: keydown=229, но keyup=13
+scanEl.addEventListener('beforeinput',e=>{ if(e.inputType==='insertLineBreak'||e.inputType==='insertParagraph') terminator(e); });
+$('#scanform').addEventListener('submit',e=>terminator(e));
+// сканер без Enter/Tab, либо пауза внутри кода — забираем по тишине, буфер склеит куски
+scanEl.addEventListener('input',()=>{ clearTimeout(pauseTimer); pauseTimer=setTimeout(()=>onChunk(takeField()),500); });
+// курсор: Enter в поле «Отгрузка» переводит в поле скана; любая клавиша вне полей ввода — тоже
+$('#doc').addEventListener('keydown',e=>{ if(e.key==='Enter'){ e.preventDefault(); scanEl.focus(); } });
+document.addEventListener('keydown',e=>{
+  const t=e.target;
+  if(t&&(t.tagName==='INPUT'||t.tagName==='TEXTAREA'||t.tagName==='SELECT'||t.isContentEditable)) return;
+  if(e.ctrlKey||e.metaKey||e.altKey) return;
+  if(!(e.key==='Enter'||e.key==='Tab'||e.key==='Shift'||e.key==='Unidentified'||e.key==='Process'||e.keyCode===229||(e.key&&e.key.length===1))) return;
+  if(!$('#view-scan').classList.contains('on')) showView('scan');
+  scanEl.focus();
+},true);
+document.addEventListener('click',e=>{ if($('#view-scan').classList.contains('on') && !e.target.closest('input,button,a,details,textarea,label')) scanEl.focus(); });
 
 // ============================================================ списки
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
